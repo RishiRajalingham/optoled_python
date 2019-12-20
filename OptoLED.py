@@ -1,20 +1,19 @@
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
-
-sns.set_style('ticks', {"axes.linewidth": "1", 'axes.yaxis.grid': False})
-import os, sys, argparse
+import sys
+import argparse
 import numpy as np
-import scipy
 import pickle as pk
 from copy import deepcopy
 import pandas as pd
+from scipy import stats as st
 from scipy.optimize import curve_fit
-import random
 import itertools
-
 from matplotlib.colors import LinearSegmentedColormap
-basic_cols=['#ff00aa', '#220022','#000000', '#002222', '#00aaff']
+
+sns.set_style('ticks', {"axes.linewidth": "1", 'axes.yaxis.grid': False})
+basic_cols = ['#ff00aa', '#220022', '#000000', '#002222', '#00aaff']
 my_cmap = LinearSegmentedColormap.from_list('mycmap', basic_cols)
 
 default_x_vars = ['constant', 'signal_signed', 'stim', 'stim_x_signal']
@@ -27,7 +26,7 @@ parser.add_argument('--data_fn', default=data_fn_default, type=str)
 parser.add_argument('--stim_oi', default=-1, type=int)
 parser.add_argument('--n_x_vars', default=4, type=int)
 parser.add_argument('--fn_ver', default=1, type=int)
-parser.add_argument('--win_size_theta', default=np.pi/8, type=float)
+parser.add_argument('--win_size_theta', default=np.pi / 8, type=float)
 
 parser.add_argument('--include_ignore', default=1, type=int)
 
@@ -57,37 +56,6 @@ class PsychometricFit(object):
         self.n_shuf = 10
 
         return
-
-    @staticmethod
-    def get_shuffled_data(df_in, shuffle_within_session=True):
-        """ shuffle stim column, controlling for session """
-        if shuffle_within_session:
-            DF = deepcopy(df_in)
-            DF2 = DF[['session', 'stim', 'stim_led']]
-            groups = [df for _, df in DF2.groupby('session')]
-            random.shuffle(groups)
-            df2 = pd.concat(groups).reset_index(drop=True)
-            DF['stim'] = df2['stim']
-            DF['stim_led'] = df2['stim_led']
-        else:
-            DF = deepcopy(df_in)
-            df_in_shuf = df_in.sample(frac=1).reset_index(drop=True)
-            DF['stim'] = df_in_shuf['stim']
-            DF['stim_led'] = df_in_shuf['stim_led']
-        return DF
-
-    def normalize_by_shuffled_res(self, res_true, res_shuf_list):
-        res_norm = {}
-        for fk in res_true.keys():
-            tmp = []
-            for si in range(self.n_shuf):
-                tmp.append(res_shuf_list[si][fk])
-            shuf_mu = np.nanmean(tmp, axis=0)
-            shuf_sig = np.nanstd(tmp, axis=0)
-            res_norm[fk] = res_true[fk]
-            res_norm['%s_shufnorm_mu' % fk] = res_true[fk] - shuf_mu
-            res_norm['%s_shufnorm_z' % fk] = (res_true[fk] - shuf_mu) / shuf_sig
-        return res_norm
 
     @staticmethod
     def psych_1(mu, *params):
@@ -196,7 +164,7 @@ class PsychometricFit(object):
                 opts.append(popt_)
                 opts_err.append(perr_)
                 mses.append(mse_)
-            mi = np.argmin(mses)
+            mi = int(np.argmin(mses))
             return opts[mi], opts_err[mi], mses[mi]
 
         opt, perr, mse = fit_psych_curve_loop(df)
@@ -228,22 +196,20 @@ class PsychometricFit(object):
                 tmp.append(x)
             return pd.DataFrame(tmp)
 
-
-        # ['constant', 'signal_signed', 'stim', 'stim_x_signal']
         df_test = get_test_df()
         res = {}
         if self.n_x_vars == 3:
             res = self.fit_psych_curve(df, df_test)
             res['z'] = res['opt'][-1] / res['opts_err'][-1]
-            res['p'] = scipy.stats.norm.sf(abs(res['z']))  # one-sided
+            res['p'] = st.norm.sf(abs(res['z']))  # one-sided
         elif self.n_x_vars == 2:
             res0 = self.fit_psych_curve(df.query('stim==0'), df_test.query('stim==0'))
             res1 = self.fit_psych_curve(df.query('stim!=0'), df_test.query('stim!=0'))
             mu_diff = res1['opt'] - res0['opt']
-            pooled_var = res0['opts_err']**2 + res1['opts_err']** 2
-            res = {'res0':res0, 'res1':res1}
+            pooled_var = res0['opts_err'] ** 2 + res1['opts_err'] ** 2
+            res = {'res0': res0, 'res1': res1}
             res['z'] = mu_diff[-2] / (pooled_var[-2] ** 0.5)
-            res['p'] = scipy.stats.norm.sf(abs(res['z']))  # one-sided
+            res['p'] = st.norm.sf(abs(res['z']))  # one-sided
 
         return res
 
@@ -256,15 +222,17 @@ class OptoledAnalyzer(object):
 
         self.n_x_vars = kwargs.get('n_x_vars', 2)
         self.fn_ver = kwargs.get('fn_ver', 1)
-        self.win_size_theta = kwargs.get('win_size_theta', np.pi/8)
-        self.win_size_rho = 4
+        self.win_size_theta = kwargs.get('win_size_theta', np.pi / 8)
+
+        self.win_size_rho = kwargs.get('win_size_rho', 2)
         self.all_results = None
         self.prefix = self.data_fn.split('/')[-1].split('.')[-2]
+        self.data_in = None
         self.load_data()
 
-        self.outfn = '%s_f%d_nvar%d_led%d_win%2.2f' % (self.prefix, self.fn_ver,
-                                                   self.n_x_vars,
-                                                   self.stim_oi, self.win_size_theta)
+        self.outfn = '%s_f%d_nvar%d_led%d_win%2.2fx%2.2f' % (self.prefix, self.fn_ver,
+                                                             self.n_x_vars, self.stim_oi,
+                                                             self.win_size_theta, self.win_size_rho)
         if self.include_ignore == 0:
             self.outfn = '%s_%s' % (self.outfn, 'noIgn')
 
@@ -284,7 +252,8 @@ class OptoledAnalyzer(object):
         self.data_in = df_
         return
 
-    def select_roi_base(self, df_in, t_s, t_d):
+    @staticmethod
+    def select_roi_base(df_in, t_s, t_d):
         def add_new_column(ref_df, col_name, col_vals, col_val_idx):
             x = pd.Series(index=ref_df.index)
             for cii, ci in enumerate(col_val_idx):
@@ -321,10 +290,9 @@ class OptoledAnalyzer(object):
             diff = np.mod(np.abs(theta - theta_c), 2 * np.pi)
             cond1 = diff <= self.win_size_theta
 
-            r = (x**2 + y**2)**0.5
+            r = (x ** 2 + y ** 2) ** 0.5
             cond2 = np.abs(r - win_rho_center) < self.win_size_rho
-            return (cond1 & cond2)
-
+            return cond1 & cond2
 
         t_s = in_slice(df_in['x'], df_in['y'])
         t_d = in_slice(df_in['xd'], df_in['yd'])
@@ -332,7 +300,9 @@ class OptoledAnalyzer(object):
 
     def get_psych_fit_results_wrapper(self, df):
         angles = np.linspace(-np.pi, np.pi, 100)
-        rho = [5]
+        rho_min = 3# + self.win_size_rho
+        rho_max = 10# - self.win_size_rho
+        rho = list(np.arange(rho_min, rho_max+1))
         all_results = []
 
         for ang in angles:
@@ -352,42 +322,45 @@ class OptoledAnalyzer(object):
 
     def plot_results(self, df):
 
-        def plot_psych_curve(win_index, ax):
-            res = self.all_results[win_index]
-            ang, r = res['theta'], self.all_results[win_index]['r']
+        def plot_psych_curve(win_index_, ax_):
+            res = self.all_results[win_index_]
+            ang, r = res['theta'], self.all_results[win_index_]['r']
             df_ = self.select_roi_slice(df, win_theta_center=ang, win_rho_center=r)
             g = df_.groupby(['signal_signed', 'stim'])['choice_in']
             g.mean().unstack().plot(linestyle='--', linewidth=0,
                                     elinewidth=1.5, marker='o',
                                     yerr=g.sem().unstack(), legend=False,
-                                    xlim=[-0.5, 0.5], ylim=[0, 1], ax=ax)
+                                    xlim=[-0.5, 0.5], ylim=[0, 1], ax=ax_)
             if 'pred' in res.keys():
                 g = res['pred'].groupby(['signal_signed', 'stim'])['psychout']
-                g.mean().unstack().plot(linestyle='--', ax=ax, linewidth=0.5, legend=False)
+                g.mean().unstack().plot(linestyle='--', ax=ax_, linewidth=0.5, legend=False)
             else:
                 for fk in ['res0', 'res1']:
                     g = res[fk]['pred'].groupby('signal_signed')['psychout']
-                    g.mean().plot(linestyle='--', ax=ax, linewidth=0.5, legend=False)
+                    g.mean().plot(linestyle='--', ax=ax_, linewidth=0.5, legend=False)
 
-            ax.set_xlim([-0.5, 0.5])
-            ax.set_ylim([0, 1])
-            ax.set_aspect(1.0)
-            sns.despine(ax=ax, trim=False, offset=10)
+            ax_.set_xlim([-0.5, 0.5])
+            ax_.set_ylim([0, 1])
+            ax_.set_aspect(1.0)
+            sns.despine(ax=ax_, trim=False, offset=10)
             plt.tight_layout()
             return
 
-        def plot_z_ring(f, ax):
+        def plot_z_ring(f_, ax_):
+            max_r = 10
+            norm = mpl.colors.Normalize(-3, 3)
             z = np.array([r['z'] for r in self.all_results])
             theta = np.array([r['theta'] for r in self.all_results])
-            norm = mpl.colors.Normalize(-3, 3)
-            n = 200  # the number of secants for the mesh
-            t = theta  # theta values
-            r = np.linspace(.6, 1, 2)  # radius values change 0.6 to 0 for full circle
-            rg, tg = np.meshgrid(r, t)  # create a r,theta meshgrid
-            c = np.tile(z, (2, 1))  # define color values as theta value
-            im = ax.pcolormesh(t, r, c, norm=norm, cmap=my_cmap)  # plot the colormesh on axis with colormap
-            ax.set_yticklabels([])  # turn of radial tick labels (yticks)
-            f.colorbar(im, ax=ax, use_gridspec=True)
+            radius = np.array([r['r'] for r in self.all_results])
+            urad = np.unique(radius)
+            for ur in urad:
+                t_ur = radius == ur
+                t = theta[t_ur]  # theta values
+                r = np.linspace(ur, max_r, 2)  # radius values change 0.6 to 0 for full circle
+                c = np.tile(z[t_ur], (2, 1))  # define color values as theta value
+                im = ax_.pcolormesh(t, r, c, norm=norm, cmap=my_cmap)  # plot the colormesh on axis with colormap
+            ax_.set_yticklabels([])  # turn of radial tick labels (yticks)
+            f_.colorbar(im, ax=ax_, use_gridspec=True)
             return
 
         f = plt.figure(figsize=(6, 3))
@@ -407,7 +380,6 @@ class OptoledAnalyzer(object):
         self.get_psych_fit_results_wrapper(self.data_in)
         self.plot_results(self.data_in)
         return
-
 
 
 def main(argv):
